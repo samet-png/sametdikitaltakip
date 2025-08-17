@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Samet Dijital Takip</title>
+<style>
+  :root{ --bg:#0f1220; --card:#171a2b; --muted:#8a94a7; --accent:#5b8cff; --ok:#22c55e; --warn:#d97706; --err:#ef4444 }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:#e8ecf3;font-family:Inter,system-ui,Arial}
+  header{padding:18px 20px;border-bottom:1px solid #23263a;position:sticky;top:0;background:rgba(15,18,32,.9);backdrop-filter:saturate(1.2) blur(8px);z-index:5}
+  h1{margin:0;font-size:20px;letter-spacing:.3px}
+  .sub{font-size:12px;color:#9aa3b8}
+  .wrap{max-width:1100px;margin:18px auto;padding:0 16px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 18px}
+  .controls > *{background:#111427;border:1px solid #23263a;color:#e8ecf3;border-radius:10px;padding:10px 12px;font-size:14px}
+  select, input[type="search"]{min-width:220px}
+  button{cursor:pointer}
+  .pill{font-size:12px;border-radius:999px;padding:6px 10px;color:#cdd6e6;background:#12162a;border:1px solid #1e2240}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .card{background:#171a2b;border:1px solid #23263a;border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:8px}
+  .card h3{margin:0;font-size:16px;line-height:1.35}
+  .meta{display:flex;gap:8px;align-items:center;color:#9aa3b8;font-size:12px}
+  .src{padding:2px 8px;border-radius:999px;background:#10142a;border:1px solid #242a49;color:#a7b3cc}
+  a.read{display:inline-flex;gap:8px;align-items:center;text-decoration:none;color:#e8ecf3;background:#111427;border:1px solid #293050;border-radius:10px;padding:8px 10px;font-size:13px}
+  a.read:hover{border-color:#3f4d7a}
+  .badge{font-size:11px;padding:2px 6px;border:1px solid #2a334f;border-radius:6px;color:#9fb0d8}
+  .ok{color:#d1ffe1;border-color:#2e6040;background:#12301e}
+  .footer{margin:24px 0;color:#9aa3b8;font-size:12px}
+  .row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+  .switch{display:inline-flex;gap:8px;align-items:center}
+  .switch input{accent-color:var(--accent)}
+  .empty{opacity:.7;text-align:center;padding:30px;border:1px dashed #2a2f46;border-radius:12px}
+  details.diag{margin-top:16px}
+  details.diag summary{cursor:pointer;color:#c9d4f5}
+  .log{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;white-space:pre-wrap;background:#0d1020;border:1px solid #23263a;border-radius:10px;padding:10px;margin-top:8px;color:#cbd5e1}
+</style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Samet Dijital Takip</h1>
+      <div class="sub">Adweek, Digiday, Martech.org, MediaPost, The Drum, AdAge, AdExchanger, Marketing Week, WARC, Campaign Live</div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="controls">
+      <input id="q" type="search" placeholder="Başlık/özet içinde ara… (örn: CTV, AI, retail media)" />
+      <select id="src"><option value="all">Tüm kaynaklar</option></select>
+      <span class="switch">
+        <input id="tr" type="checkbox" checked />
+        <label for="tr">Türkçeye çevir</label>
+      </span>
+      <select id="provider">
+        <option value="mymemory">Çevirici: MyMemory (ücretsiz - tarayıcıdan)</option>
+        <option value="google">Çevirici: Google (sunucu)</option>
+        <option value="deepl">Çevirici: DeepL (sunucu)</option>
+      </select>
+      <button id="refresh">↻ Yenile</button>
+      <span id="status" class="pill">Hazır</span>
+      <span id="count" class="pill">0 haber</span>
+    </div>
+
+    <div id="list" class="grid"></div>
+    <details class="diag">
+      <summary>Tanılama</summary>
+      <div id="diag" class="log">Hazır</div>
+    </details>
+    <div class="footer">Otomatik yenileme: 15 dk • Çeviriler localStorage’a önbelleklenir.</div>
+  </div>
+
+<script>
+const FEEDS = [
+  {name:"Adweek",           url:"https://www.adweek.com/feed/"},
+  {name:"Digiday",          url:"https://digiday.com/feed/"},
+  {name:"Martech.org",      url:"https://martech.org/feed/"},
+  {name:"MediaPost",        url:"https://www.mediapost.com/publications/rss/"},
+  {name:"The Drum",         url:"https://www.thedrum.com/rss"},
+  {name:"Ad Age",           url:"https://adage.com/rss.xml"},
+  {name:"AdExchanger",      url:"https://adexchanger.com/feed/"},
+  {name:"Marketing Week",   url:"https://www.marketingweek.com/feed/"},
+  {name:"WARC (Latest)",    url:"https://www.warc.com/latest/rss"},
+  {name:"Campaign Live",    url:"https://www.campaignlive.co.uk/feeds/latest"}
+];
+
+const $=s=>document.querySelector(s);
+const list=$("#list"), q=$("#q"), srcSel=$("#src"), trChk=$("#tr"), providerSel=$("#provider"), statusPill=$("#status"), diag=$("#diag"), count=$("#count");
+const readKey="samet_read", trCacheKey="samet_tr_cache_srv";
+const trCache=JSON.parse(localStorage.getItem(trCacheKey)||"{}");
+const readSet=new Set(JSON.parse(localStorage.getItem(readKey)||"[]"));
+
+function saveRead(){ localStorage.setItem(readKey, JSON.stringify([...readSet])); }
+function saveTr(){ localStorage.setItem(trCacheKey, JSON.stringify(trCache)); }
+function timeAgo(d){ const s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return`${s} sn`; const m=s/60|0; if(m<60)return`${m} dk`; const h=m/60|0; if(h<24)return`${h} sa`; const d2=h/24|0; return`${d2} gün`; }
+function stripHtml(html){ const d=document.createElement("div"); d.innerHTML=html; return d.textContent || d.innerText || ""; }
+function escapeHtml(s){ return s.replace(/[&<>"']/g, ch => ({ "&":"&amp;","<":"&lt;",">":"&gt;", "\"":"&quot;","'":"&#039;" }[ch])); }
+function setStatus(t){ statusPill.textContent=t; }
+function log(t){ diag.textContent += `\n${t}`; }
+
+// Backend autodetect: Try Vercel '/api/*', fallback Netlify '/.netlify/functions/*'
+async function backendFetch(path, options={}){
+  const paths = ["/api"+path, "/.netlify/functions"+path];
+  let lastErr;
+  for(const p of paths){
+    try{
+      const r = await fetch(p, options);
+      if(!r.ok) throw new Error(p+" -> "+r.status);
+      return r;
+    }catch(e){ lastErr=e; }
+  }
+  throw lastErr || new Error("Backend bulunamadı");
+}
+
+async function fetchFeed(feed){
+  log(`[${feed.name}] sunucudan çekiliyor…`);
+  const res = await backendFetch("/rss?url="+encodeURIComponent(feed.url));
+  const txt = await res.text();
+  const i = txt.indexOf('<'); const cleaned = i>0 ? txt.slice(i) : txt;
+  const xml = new DOMParser().parseFromString(cleaned, "text/xml");
+  const nodes = [...xml.querySelectorAll("item, entry")].slice(0,25);
+  log(`[${feed.name}] kayıt: ${nodes.length}`);
+  return nodes.map(n=>{
+    const get = s => n.querySelector(s)?.textContent?.trim();
+    let link = get("link");
+    const atomLink = n.querySelector("link[href]")?.getAttribute("href"); if(atomLink) link = atomLink;
+    const pub = get("pubDate") || get("updated") || get("published");
+    const desc = get("description") || get("summary") || "";
+    const title = get("title") || "(başlık yok)";
+    return { source:feed.name, title, desc, link, date: pub? new Date(pub): new Date(), id: link || (feed.name+'_'+title) };
+  });
+}
+
+async function serverTranslate(text, provider, from="en", to="tr"){
+  const body = JSON.stringify({ q:text, provider, source:from, target:to });
+  const headers = { "Content-Type":"application/json" };
+  const res = await backendFetch("/translate", { method:"POST", headers, body });
+  const j = await res.json();
+  return j?.text || text;
+}
+
+// Client-side MyMemory fallback for those who prefer free
+async function memoryTranslate(text, from="en", to="tr"){
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`;
+  const r = await fetch(url); const j = await r.json(); return j?.responseData?.translatedText || text;
+}
+
+async function translateText(text, from="en", to="tr"){
+  if(!text || !trChk.checked) return text;
+  const prov = providerSel.value;
+  const key = `${prov}:${from}:${to}:${text.slice(0,4000)}`;
+  if(trCache[key]) return trCache[key];
+  let out;
+  if(prov==="google" || prov==="deepl") out = await serverTranslate(text, prov, from, to);
+  else out = await memoryTranslate(text, from, to);
+  trCache[key]=out; saveTr(); await new Promise(r=>setTimeout(r,120)); return out;
+}
+
+function render(items){
+  list.innerHTML="";
+  if(!items.length){ list.innerHTML = `<div class="empty card">Sonuç yok. Filtre/arama temizleyip deneyin.</div>`; count.textContent="0 haber"; return; }
+  const frag = document.createDocumentFragment();
+  items.forEach(it=>{
+    const el = document.createElement("div"); el.className="card";
+    const isRead = readSet.has(it.id);
+    const titleShow = (trChk.checked && it.titleTR) ? it.titleTR : it.title;
+    const descBase = (trChk.checked && it.descTR) ? it.descTR : stripHtml(it.desc).slice(0,220);
+    el.innerHTML = `
+      <div class="row">
+        <span class="src">${it.source}</span>
+        <span class="meta">
+          <span class="badge">${timeAgo(it.date)} önce</span>
+          ${isRead?'<span class="badge ok">okundu</span>':''}
+        </span>
+      </div>
+      <h3>${escapeHtml(titleShow)}</h3>
+      <div class="meta">${escapeHtml(descBase)}${descBase.length>=200?'…':''}</div>
+      <div class="row">
+        <a class="read" href="${it.link}" target="_blank" rel="noopener">Haberi aç →</a>
+        <button class="pill" data-id="${it.id}">${isRead?'Okundu işaretini kaldır':'Okundu işaretle'}</button>
+      </div>
+    `;
+    el.querySelector("button").addEventListener("click",(e)=>{
+      const id=e.currentTarget.getAttribute("data-id");
+      if(readSet.has(id)) readSet.delete(id); else readSet.add(id);
+      localStorage.setItem(readKey, JSON.stringify([...readSet]));
+      render(items);
+    });
+    frag.appendChild(el);
+  });
+  list.appendChild(frag);
+  count.textContent = `${items.length} haber`;
+}
+
+async function loadAll(){
+  setStatus("Kaynaklar yükleniyor…");
+  try{
+    const picked = srcSel.value==="all" ? FEEDS : FEEDS.filter(f=>f.name===srcSel.value);
+    const res = await Promise.allSettled(picked.map(fetchFeed));
+    let items = [];
+    res.forEach((r,i)=>{ if(r.status==="fulfilled") items=items.concat(r.value); else log(`[HATA] ${picked[i].name}: ${r.reason}`) });
+    const seen=new Set(); items=items.filter(it=>{ const k=it.link||it.id; if(seen.has(k)) return false; seen.add(k); return true; });
+    items.sort((a,b)=>b.date-a.date);
+    const term=q.value.trim().toLowerCase();
+    if(term) items = items.filter(it => [it.title,it.desc,it.source].join(" ").toLowerCase().includes(term));
+    if(trChk.checked){
+      const limit = Math.min(items.length, 60);
+      await Promise.all(items.slice(0,limit).map(async it=>{
+        it.titleTR = await translateText(it.title);
+        it.descTR  = await translateText(stripHtml(it.desc).slice(0,400));
+      }));
+    }
+    render(items);
+    setStatus(`Güncellendi • ${new Date().toLocaleTimeString()}`);
+  }catch(e){
+    log('GENEL HATA: '+e);
+    setStatus("Hata");
+  }
+}
+
+(function init(){
+  FEEDS.forEach(f=>{ const o=document.createElement("option"); o.value=f.name; o.textContent=f.name; srcSel.appendChild(o); });
+  document.getElementById("refresh").addEventListener("click", loadAll);
+  srcSel.addEventListener("change", loadAll);
+  trChk.addEventListener("change", loadAll);
+  providerSel.addEventListener("change", loadAll);
+  q.addEventListener("input", debounce(loadAll,300));
+  loadAll();
+  setInterval(loadAll, 15*60*1000);
+})();
+
+function debounce(fn,wait){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),wait); }; }
+</script>
+</body>
+</html>
